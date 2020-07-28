@@ -1,12 +1,18 @@
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 import org.apache.commons.cli.*;
 
 /*
@@ -17,8 +23,11 @@ import org.apache.commons.cli.*;
  */
 public class InstrumentationPretty {
 
+    private int PIPE_TIMEOUT_SECONDS = 5*60;
+
     private String outputpath;
 
+    private ExecutorService readerExecutor = Executors.newSingleThreadExecutor();
     public InstrumentationPretty(String outputpath){
         this.outputpath = outputpath;
     }
@@ -45,9 +54,9 @@ public class InstrumentationPretty {
         
         //read lines from STDIN 
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in)); 
-        // Reading data using readLine 
+        // Reading data using readLine
         String input = null;
-        while( (input = reader.readLine()) != null ){
+        while( (input = readLineWithTimeout(reader, PIPE_TIMEOUT_SECONDS)) != null ){
             lines.add(input);
 
             if (!reader.ready()) {
@@ -62,6 +71,30 @@ public class InstrumentationPretty {
         parser.done();
 
         return xmlTestListener.getRunResult().hasFailedTests();
+    }
+
+    private String readLineWithTimeout(BufferedReader reader, int timeout) throws IOException {
+        if (reader.ready()) {
+            return reader.readLine();
+        }
+
+        Callable<String> readJob = reader::readLine;
+
+        Future<String> future = readerExecutor.submit(readJob);
+        try {
+            return future.get(timeout, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof IOException) {
+                throw (IOException) e.getCause();
+            }
+            e.printStackTrace();
+        } catch (TimeoutException e) {
+            e.printStackTrace();
+        }
+        //Ignore timeout exception above so we still generate a report
+        return null;
     }
 
     public static void main(String args[]){
