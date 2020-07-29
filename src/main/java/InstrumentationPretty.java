@@ -70,7 +70,8 @@ public class InstrumentationPretty {
         parser.processNewLines(lines.toArray(new String[0]));
         parser.done();
 
-        return xmlTestListener.getRunResult().hasFailedTests();
+        final TestRunResult overallResult = xmlTestListener.getRunResult();
+        return overallResult.isRunFailure() || overallResult.hasFailedTests();
     }
 
     private String readLineWithTimeout(BufferedReader reader, int timeout) throws IOException {
