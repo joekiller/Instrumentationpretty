@@ -98,6 +98,7 @@ public class InstrumentationResultParser extends MultiLineReceiver {
         private static final int OK = 0;
         private static final int IN_PROGRESS = 2;
         private static final int SKIPPED = -3;
+        private static final int ASSUMPTION_FAILED = -4;
     }
 
     /** Prefixes used to identify output. */
@@ -463,6 +464,7 @@ public class InstrumentationResultParser extends MultiLineReceiver {
                 mNumTestsRun++;
                 break;
             case StatusCodes.SKIPPED:
+            case StatusCodes.ASSUMPTION_FAILED:
                 metrics = getAndResetTestMetrics();
                 for (ITestRunListener listener : mTestListeners) {
                     listener.testSkipped(testId, metrics);
