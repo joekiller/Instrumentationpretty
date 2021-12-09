@@ -1,12 +1,18 @@
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 import org.apache.commons.cli.*;
 
 /*
@@ -17,16 +23,23 @@ import org.apache.commons.cli.*;
  */
 public class InstrumentationPretty {
 
+    private int PIPE_TIMEOUT_SECONDS = 5*60;
+
     private String outputpath;
 
+    private ExecutorService readerExecutor = Executors.newSingleThreadExecutor();
     public InstrumentationPretty(String outputpath){
         this.outputpath = outputpath;
     }
 
-    public void processInsturmentationOutput() throws IOException{
+    /**
+     * @return true if any tests failed
+     */
+    public boolean processInsturmentationOutput() throws IOException{
         //create test listener and parser
-        XmlTestRunListener testListener = new XmlTestRunListener();
-        InstrumentationResultParser parser = new InstrumentationResultParser("Instrumentation results", testListener);
+        XmlTestRunListener xmlTestListener = new XmlTestRunListener();
+        HtmlTestRunListener htmlTestListener = new HtmlTestRunListener();
+        InstrumentationResultParser parser = new InstrumentationResultParser("Instrumentation results", Arrays.asList(xmlTestListener, htmlTestListener));
         File reportDir = null;
         if(!this.outputpath.isEmpty()){
             reportDir = new File(outputpath);
@@ -35,19 +48,54 @@ public class InstrumentationPretty {
             reportDir = new File(System.getProperty("user.dir") + "/reports");
         }
         reportDir.mkdir();
-        testListener.setReportDir(reportDir);
-        List<String> lines = new ArrayList<String>(); 
+        xmlTestListener.setReportDir(reportDir);
+        htmlTestListener.setReportDir(reportDir);
+        List<String> lines = new ArrayList<String>();
         
         //read lines from STDIN 
         BufferedReader reader = new BufferedReader(new InputStreamReader(System.in)); 
-        // Reading data using readLine 
+        // Reading data using readLine
         String input = null;
-        while( (input = reader.readLine()) != null ){
+        while( (input = readLineWithTimeout(reader, PIPE_TIMEOUT_SECONDS)) != null ){
             lines.add(input);
+
+            if (!reader.ready()) {
+                // Next read may block, flush the buffer
+                parser.processNewLines(lines.toArray(new String[0]));
+                lines.clear();
+            }
         }
 
+        // flush anything remaining in buffer
         parser.processNewLines(lines.toArray(new String[0]));
         parser.done();
+
+        final TestRunResult overallResult = xmlTestListener.getRunResult();
+        return overallResult.isRunFailure() || overallResult.hasFailedTests();
+    }
+
+    private String readLineWithTimeout(BufferedReader reader, int timeout) throws IOException {
+        if (reader.ready()) {
+            return reader.readLine();
+        }
+
+        Callable<String> readJob = reader::readLine;
+
+        Future<String> future = readerExecutor.submit(readJob);
+        try {
+            return future.get(timeout, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof IOException) {
+                throw (IOException) e.getCause();
+            }
+            e.printStackTrace();
+        } catch (TimeoutException e) {
+            e.printStackTrace();
+        }
+        //Ignore timeout exception above so we still generate a report
+        return null;
     }
 
     public static void main(String args[]){
@@ -72,13 +120,18 @@ public class InstrumentationPretty {
 
         String outputFilePath = cmd.getOptionValue("output");
         try {
+            final InstrumentationPretty resultParser;
             if(outputFilePath != null){
-                new InstrumentationPretty(outputFilePath).processInsturmentationOutput();
+                resultParser = new InstrumentationPretty(outputFilePath);
             }else{
-                new InstrumentationPretty("").processInsturmentationOutput();
-            }        
+                resultParser = new InstrumentationPretty("");
+            }
+
+            boolean failures = resultParser.processInsturmentationOutput();
+            System.exit(failures ? 2 : 0);
         } catch (IOException e) {
             e.printStackTrace();
-        }   
+            System.exit(1);
+        }
     }
 }
